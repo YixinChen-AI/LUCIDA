@@ -29,33 +29,27 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
         ]
         return direction_matrix
     new_direction = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
-    
     direction_check = np.mean(np.abs(np.array(ct_itk.GetDirection()) - np.array(new_direction)))
     spacing_check = np.mean(np.abs(np.array(ct_itk.GetSpacing()) - np.array([1.5,1.5,1.5])))
 
-    if check:
-        if direction_check < 0.05 and spacing_check < 0.05:
-            print("direction check: OK!!")
-            print("spacing check: OK!!")
-        
-        else:
-            print("direction is",np.array(ct_itk.GetDirection()))
-            print("spacing is",np.array(ct_itk.GetSpacing()))
-            print("direction need to be: ",new_direction)
-            print("spacing need to be: [1.5,1.5,1.5]")
-            
-            
-            print("Doing MEGACT Standard Protocol...")
-            ct_itk = resampleVolume([1.5,1.5,1.5],ct_itk,resamplemethod=sitk.sitkLinear)
-        
-            ct_transformed = adjust_image_direction(ct_itk, new_direction)
-            sitk.WriteImage(ct_transformed, ct_path.replace(".nii.gz","_megact_tmp.nii.gz"))
-            print("standard protocol nii has been write in ",ct_path.replace(".nii.gz","megact_tmp.nii.gz"))
-            print("please restart Megact and use file with _megact_tmp.nii.gz in the save path")
-            exit()
-        
+    print("----------------pre-process <LUCID Standard Protocol>------------------------")
     
-    print("----------------pre-process------------------------")
+    if spacing_check < 0.05:
+        print("spacing check: OK!!")
+    else:
+        print("spacing is",np.array(ct_itk.GetSpacing()))
+        print("spacing need to be: [1.5,1.5,1.5]")
+        ct_itk = resampleVolume([1.5,1.5,1.5],ct_itk,resamplemethod=sitk.sitkLinear)
+        
+    if direction_check < 0.05:
+        print("direction check: OK!!")
+    else:
+        print("direction is",np.array(ct_itk.GetDirection()))
+        print("direction need to be: ",new_direction)
+            
+        ct_itk = adjust_image_direction(ct_itk, new_direction)
+        sitk.WriteImage(ct_itk, ct_path.replace(".nii.gz","_lucid.nii.gz"))
+        print("standard protocol nii has been write in ",ct_path.replace(".nii.gz","lucid.nii.gz"))
     
     # print("CurvatureFlow!!")
     # ct_itk = sitk.CurvatureFlow(image1=ct_itk, timeStep=0.125, numberOfIterations=5)
@@ -127,11 +121,10 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
                     sw_device="cuda:0",
                     device="cpu",
                     progress=True)
-        wb_pred = torch.sigmoid(wb_pred.float32())
+        wb_pred = torch.sigmoid(wb_pred.float())
         wb_pred[wb_pred < 0.5] = 0
     
     print("----------------post-process------------------------")
-    print("create combined nii.gz. ")
     
     if not os.path.exists( os.path.join(os.path.dirname(ct_path),outputdiranme)):
         os.mkdir(os.path.join(os.path.dirname(ct_path),outputdiranme))
@@ -143,4 +136,7 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
     sitk_image.SetDirection(ct_itk.GetDirection())
     sitk_image.SetSpacing(ct_itk.GetSpacing())
     sitk_image.SetOrigin(ct_itk.GetOrigin())
+    print("----------------file saving------------------------")
     sitk.WriteImage(sitk_image, os.path.join(os.path.dirname(ct_path),outputdiranme,f"combined.nii.gz"))
+    print("create combined nii.gz. ")
+    
