@@ -13,7 +13,7 @@ def adjust_image_direction(image, desired_direction):
     current_direction = image.GetDirection()
 
     # 计算需要翻转的轴
-    flip_axes = [current_direction[i] * desired_direction[i] < 0 for i in range(0, 3)]
+    flip_axes = [current_direction[i] * desired_direction[i] < 0 for i in [0,4,8]]
     print("the axis need to be flip?:", flip_axes)
     # 翻转图像
     adjusted_image = sitk.Flip(image, flip_axes)
