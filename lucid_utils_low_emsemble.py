@@ -4,11 +4,13 @@ sys.path.append(file_path)
 import argparse,os
 import SimpleITK as sitk
 import numpy as np
-import torch,monai
+import torch,monai,gc
 import torch.nn as nn
 from datautils import resampleVolume,adjust_image_direction
 from tqdm import tqdm
 from lucidmodel.STUNet import STUNet
+from lucidutils import load_model
+
 # import monai.transforms as transforms
 
 def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=None,output=105,adaptor=None):
@@ -66,74 +68,85 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
     ct = sitk.GetArrayFromImage(ct_itk)
     ct = torch.tensor(ct).float().unsqueeze(0).unsqueeze(0)
     ct = scale_intensity_range(ct, a_min=-1000, a_max=1000, b_min=0.0, b_max=1.0, clip=True)
-    
-    print("----------------model loading------------------------")
 
-    if modelname =="unet_large":
-        model = monai.networks.nets.UNet(
-                    spatial_dims=3,
-                    in_channels=1,
-                    out_channels=192,
-                    channels=(64,64,128,256,512),
-                    strides=(2,2,2,2),
-                    num_res_units=2,
-                    norm=monai.networks.layers.Norm.BATCH,
-                )
-    elif modelname == "swinunetr":
-        model = monai.networks.nets.SwinUNETR(
-                img_size=(192,192,192),
-                in_channels=1,
-                out_channels=192,
-                feature_size=48,
-                drop_rate=0.1,
-                attn_drop_rate=0.1,
-                dropout_path_rate=0.1,
-            )
-    elif modelname=="STUNet_large":
-        model = STUNet(1, 192, depth=[2,2,2,2,2,2], dims=[64, 128, 256, 512, 1024, 1024],
-                    pool_op_kernel_sizes = ((2,2,2),(2,2,2),(2,2,2),(2,2,2),(2,2,2)),
-               conv_kernel_sizes = ((3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3)))
-    ckpt = torch.load(modelweight,map_location="cpu")
-    model.load_state_dict(ckpt["model"])
-        
-    model = model.to("cuda:0")
-    model = model.half()
-    model = model.eval()
+    
+    if isinstance(modelname,list):
+        print("emsemble mode!!")
+        wb_preds = 0
+        for mn,mn_ckpt in zip(modelname,modelweight):
+            print("model:",mn)
+            model = load_model(mn)
+            ckpt = torch.load(mn_ckpt,map_location="cpu")
+            model.load_state_dict(ckpt["model"])
 
-    if adaptor is not None:
-        print("-----------------Adaptor is used! use: {}------------------------------".format(adaptor["name"]))
-        from adaptor import FourierTransform,Transform
-        if adaptor["name"] == "FT":
-            FT = FourierTransform(input_channel=2)
-            FT.load_state_dict(torch.load(adaptor["ckpt"])["model"])
-            FT = FT.to("cuda:0")
-            FT = FT.eval()
-            model = nn.Sequential(FT,model)
-        if adaptor["name"] == "T":
-            T = Transform()
-            T.load_state_dict(torch.load(adaptor["ckpt"])["model"])
-            T = T.half()
-            T = T.to("cuda:0")
-            T = T.eval()
-            model = nn.Sequential(T,model)
-    print("----------------Half-Precision inference------------------------")
-    
-    ct = ct.half()
-    
-    print("----------------sliding_window_inference------------------------")
-    
-    with torch.no_grad():
-        wb_pred = monai.inferers.sliding_window_inference(
-                    ct,(192,192,192),
-                    sw_batch_size=1,
-                    predictor=model,
-                    overlap=0.5,
-                    mode="gaussian",
-                    sw_device="cuda:0",
-                    device="cpu",
-                    progress=True)
-        wb_pred = torch.sigmoid(wb_pred.float())
+            model = model.to("cuda:0")
+            model = model.half()
+            model = model.eval()
+
+            ct = ct.half()
+
+            with torch.no_grad():
+                wb_pred = monai.inferers.sliding_window_inference(
+                            ct,(192,192,192),
+                            sw_batch_size=1,
+                            predictor=model,
+                            overlap=0.5,
+                            mode="constant",
+                            sw_device="cuda:0",
+                            device="cpu",
+                            progress=True)
+                wb_pred = torch.sigmoid(wb_pred.float())
+                wb_preds += wb_pred
+                del model,wb_pred
+                torch.cuda.empty_cache()
+                gc.collect()
+        wb_pred = wb_preds / len(modelname)
         wb_pred[wb_pred < 0.5] = 0
+        
+    else:
+        print("----------------model loading------------------------")
+        model = load_model(modelname)
+        ckpt = torch.load(modelweight,map_location="cpu")
+        model.load_state_dict(ckpt["model"])
+        
+        model = model.to("cuda:0")
+        model = model.half()
+        model = model.eval()
+
+        if adaptor is not None:
+            print("-----------------Adaptor is used! use: {}------------------------------".format(adaptor["name"]))
+            from adaptor import FourierTransform,Transform
+            if adaptor["name"] == "FT":
+                FT = FourierTransform(input_channel=2)
+                FT.load_state_dict(torch.load(adaptor["ckpt"])["model"])
+                FT = FT.to("cuda:0")
+                FT = FT.eval()
+                model = nn.Sequential(FT,model)
+            if adaptor["name"] == "T":
+                T = Transform()
+                T.load_state_dict(torch.load(adaptor["ckpt"])["model"])
+                T = T.half()
+                T = T.to("cuda:0")
+                T = T.eval()
+                model = nn.Sequential(T,model)
+        print("----------------Half-Precision inference------------------------")
+        
+        ct = ct.half()
+        
+        print("----------------sliding_window_inference------------------------")
+    
+        with torch.no_grad():
+            wb_pred = monai.inferers.sliding_window_inference(
+                        ct,(192,192,192),
+                        sw_batch_size=1,
+                        predictor=model,
+                        overlap=0.5,
+                        mode="gaussian",
+                        sw_device="cuda:0",
+                        device="cpu",
+                        progress=True)
+            wb_pred = torch.sigmoid(wb_pred.float())
+            wb_pred[wb_pred < 0.5] = 0
     
     print("----------------post-process------------------------")
     

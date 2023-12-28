@@ -5,12 +5,13 @@ import argparse,os
 import SimpleITK as sitk
 import numpy as np
 import torch,monai
+import torch.nn as nn
 from datautils import resampleVolume,adjust_image_direction
 from tqdm import tqdm
 from lucidmodel.STUNet import STUNet
 # import monai.transforms as transforms
 
-def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=None,output=105):
+def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=None,output=105,adaptor=None):
     
     print(f"提供的NIfTI路径是:{ct_path}")
     file_path = os.path.dirname(os.path.abspath(__file__))
@@ -40,21 +41,19 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
         print("spacing is",np.array(ct_itk.GetSpacing()))
         print("spacing need to be: [1.5,1.5,1.5]")
         ct_itk = resampleVolume([1.5,1.5,1.5],ct_itk,resamplemethod=sitk.sitkLinear)
-        
-    if direction_check < 0.05:
-        print("direction check: OK!!")
+
+    if check:
+        if direction_check < 0.05:
+            print("direction check: OK!!")
+        else:
+            print("direction is",np.array(ct_itk.GetDirection()))
+            print("direction need to be: ",new_direction)
+                
+            ct_itk = adjust_image_direction(ct_itk, new_direction)
+            sitk.WriteImage(ct_itk, ct_path.replace(".nii.gz","_lucid.nii.gz"))
+            print("standard protocol nii has been write in ",ct_path.replace(".nii.gz","lucid.nii.gz"))
     else:
-        print("direction is",np.array(ct_itk.GetDirection()))
-        print("direction need to be: ",new_direction)
-            
-        ct_itk = adjust_image_direction(ct_itk, new_direction)
-        sitk.WriteImage(ct_itk, ct_path.replace(".nii.gz","_lucid.nii.gz"))
-        print("standard protocol nii has been write in ",ct_path.replace(".nii.gz","lucid.nii.gz"))
-    
-    # print("CurvatureFlow!!")
-    # ct_itk = sitk.CurvatureFlow(image1=ct_itk, timeStep=0.125, numberOfIterations=5)
-    # print("LaplacianSharpening!!")
-    # ct_itk = sitk.LaplacianSharpening(ct_itk)
+        print("arg chech is set to False so no direction check!!")
     
     def scale_intensity_range(ct, a_min, a_max, b_min, b_max, clip):
         if clip:
@@ -97,16 +96,28 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
     ckpt = torch.load(modelweight,map_location="cpu")
     model.load_state_dict(ckpt["model"])
         
-    # model = Mega_model((192,192,192),in_channels=1,out_channels=text_features.shape[0],backbone = "STUNet_large",organ_embedding = text_features)
-    # ckpt = torch.load(file_path+"/model_weight/lucid_unet_large_192/epoch_7.pth",map_location="cpu")
-    # model.load_state_dict(ckpt["model"])
     model = model.to("cuda:0")
+    model = model.half()
     model = model.eval()
 
-
+    if adaptor is not None:
+        print("-----------------Adaptor is used! use: {}------------------------------".format(adaptor["name"]))
+        from adaptor import FourierTransform,Transform
+        if adaptor["name"] == "FT":
+            FT = FourierTransform(input_channel=2)
+            FT.load_state_dict(torch.load(adaptor["ckpt"])["model"])
+            FT = FT.to("cuda:0")
+            FT = FT.eval()
+            model = nn.Sequential(FT,model)
+        if adaptor["name"] == "T":
+            T = Transform()
+            T.load_state_dict(torch.load(adaptor["ckpt"])["model"])
+            T = T.half()
+            T = T.to("cuda:0")
+            T = T.eval()
+            model = nn.Sequential(T,model)
     print("----------------Half-Precision inference------------------------")
     
-    model = model.half()
     ct = ct.half()
     
     print("----------------sliding_window_inference------------------------")
@@ -126,8 +137,8 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
     
     print("----------------post-process------------------------")
     
-    if not os.path.exists( os.path.join(os.path.dirname(ct_path),outputdiranme)):
-        os.mkdir(os.path.join(os.path.dirname(ct_path),outputdiranme))
+    if not os.path.exists( os.path.join(os.path.dirname(ct_path),outputdirname)):
+        os.mkdir(os.path.join(os.path.dirname(ct_path),outputdirname))
     
     combined = torch.argmax(wb_pred[0,:output],dim=0).detach().cpu().numpy()
     # 创建SimpleITK图像
@@ -137,6 +148,6 @@ def lucid(ct_path,outputdiranme = "lucid",check=True,modelname=None,modelweight=
     sitk_image.SetSpacing(ct_itk.GetSpacing())
     sitk_image.SetOrigin(ct_itk.GetOrigin())
     print("----------------file saving------------------------")
-    sitk.WriteImage(sitk_image, os.path.join(os.path.dirname(ct_path),outputdiranme,f"combined.nii.gz"))
+    sitk.WriteImage(sitk_image, os.path.join(os.path.dirname(ct_path),outputdirname,f"combined.nii.gz"))
     print("create combined nii.gz. ")
     
