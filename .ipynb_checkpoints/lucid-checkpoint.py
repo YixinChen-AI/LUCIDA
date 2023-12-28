@@ -17,5 +17,5 @@ os.environ["CUDA_VISIBLE_DEVICES"]=str(args.gpu)
 
 lucid(ct_path,
       modelname="STUNet_large",
-      modelweight="./model_weight/lucid_STUNet_large_192e40.pth",
+      modelweight="./model_weight/duct_STUNet_large_192e05.pth",
      output=112)

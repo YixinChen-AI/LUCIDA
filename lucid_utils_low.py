@@ -119,6 +119,21 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
     print("----------------Half-Precision inference------------------------")
     
     ct = ct.half()
+
+    # print("----------------quantization inference------------------------")
+    
+    # model = torch.ao.quantization.quantize_dynamic(
+    #     model, 
+    #     {torch.nn.Conv3d},
+    #     dtype=torch.qint8
+    # )
+
+    class SelectChannels(nn.Module):
+        def __init__(self):
+            super(SelectChannels, self).__init__()
+        def forward(self, x):
+            return x[:, :112]
+    model = nn.Sequential(model,SelectChannels())
     
     print("----------------sliding_window_inference------------------------")
     
@@ -128,12 +143,12 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
                     sw_batch_size=1,
                     predictor=model,
                     overlap=0.5,
-                    mode="gaussian",
+                    mode="constant",
                     sw_device="cuda:0",
                     device="cpu",
                     progress=True)
-        wb_pred = torch.sigmoid(wb_pred.float())
-        wb_pred[wb_pred < 0.5] = 0
+        # wb_pred = torch.sigmoid(wb_pred.float())
+        # wb_pred[wb_pred < 0.5] = 0
     
     print("----------------post-process------------------------")
     
