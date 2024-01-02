@@ -11,7 +11,7 @@ from tqdm import tqdm
 from lucidmodel.STUNet import STUNet
 # import monai.transforms as transforms
 
-def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=None,output=105,adaptor=None):
+def lucid(ct_path,outputpath= None,check=True,modelname=None,modelweight=None,output=105,adaptor=None):
     
     print(f"提供的NIfTI路径是:{ct_path}")
     file_path = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +42,10 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
         print("spacing need to be: [1.5,1.5,1.5]")
         ct_itk = resampleVolume([1.5,1.5,1.5],ct_itk,resamplemethod=sitk.sitkLinear)
 
+    outputdirname = f"lucid_{modelname}"
+    if not os.path.exists( os.path.join(os.path.dirname(ct_path),outputdirname)):
+        if outputpath is None:
+            os.mkdir(os.path.join(os.path.dirname(ct_path),outputdirname))
     if check:
         if direction_check < 0.05:
             print("direction check: OK!!")
@@ -50,10 +54,12 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
             print("direction need to be: ",new_direction)
                 
             ct_itk = adjust_image_direction(ct_itk, new_direction)
-            sitk.WriteImage(ct_itk, ct_path.replace(".nii.gz","_lucid.nii.gz"))
-            print("standard protocol nii has been write in ",ct_path.replace(".nii.gz","lucid.nii.gz"))
+            
     else:
         print("arg chech is set to False so no direction check!!")
+
+    sitk.WriteImage(ct_itk, os.path.join(os.path.dirname(ct_path),f"lucid_ct.nii.gz"))
+    print("standard protocol nii has been write in ",os.path.join(os.path.dirname(ct_path),f"lucid_ct.nii.gz"))
     
     def scale_intensity_range(ct, a_min, a_max, b_min, b_max, clip):
         if clip:
@@ -74,10 +80,10 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
                     spatial_dims=3,
                     in_channels=1,
                     out_channels=192,
-                    channels=(64,64,128,256,512),
+                    channels=(64,128,256,512,1024),
                     strides=(2,2,2,2),
                     num_res_units=2,
-                    norm=monai.networks.layers.Norm.BATCH,
+                    norm=monai.networks.layers.Norm.INSTANCE,
                 )
     elif modelname == "swinunetr":
         model = monai.networks.nets.SwinUNETR(
@@ -120,14 +126,6 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
     
     ct = ct.half()
 
-    # print("----------------quantization inference------------------------")
-    
-    # model = torch.ao.quantization.quantize_dynamic(
-    #     model, 
-    #     {torch.nn.Conv3d},
-    #     dtype=torch.qint8
-    # )
-
     class SelectChannels(nn.Module):
         def __init__(self):
             super(SelectChannels, self).__init__()
@@ -152,9 +150,6 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
     
     print("----------------post-process------------------------")
     
-    if not os.path.exists( os.path.join(os.path.dirname(ct_path),outputdirname)):
-        os.mkdir(os.path.join(os.path.dirname(ct_path),outputdirname))
-    
     combined = torch.argmax(wb_pred[0,:output],dim=0).detach().cpu().numpy()
     # 创建SimpleITK图像
     sitk_image = sitk.GetImageFromArray(combined)
@@ -163,6 +158,10 @@ def lucid(ct_path,outputdirname = "lucid",check=True,modelname=None,modelweight=
     sitk_image.SetSpacing(ct_itk.GetSpacing())
     sitk_image.SetOrigin(ct_itk.GetOrigin())
     print("----------------file saving------------------------")
-    sitk.WriteImage(sitk_image, os.path.join(os.path.dirname(ct_path),outputdirname,f"combined.nii.gz"))
-    print("create combined nii.gz. ")
+    if outputpath is not None:
+        sitk.WriteImage(sitk_image, outputpath)
+        print("create output path in ",outputpath)
+    else:
+        sitk.WriteImage(sitk_image, os.path.join(os.path.dirname(ct_path),outputdirname,f"combined.nii.gz"))
+        print("create combined nii.gz. ")
     
