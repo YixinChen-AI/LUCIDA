@@ -18,7 +18,7 @@ chmod 777 ./install.sh
 ```
 from lucid_utils_low import lucid
 lucid("./testdata/autopet/CTres.nii.gz", # input ct nii.gz path
-      modelname="STUNet_large",
+      outputpath="./testdata/totalseg/output123.nii.gz", # you can define the specific output segmentation nii.gz file to customized path. If you set None(default) to outputpath, the output file will be saved in "lucid_model_name/combiend.nii.gz".      modelname="STUNet_large",
       modelweight="./model_weight/lucid_STUNet_large_192e40.pth",
      output=112)
 ```
