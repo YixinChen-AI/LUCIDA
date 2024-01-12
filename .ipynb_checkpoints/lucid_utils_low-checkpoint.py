@@ -9,9 +9,10 @@ import torch.nn as nn
 from datautils import resampleVolume,adjust_image_direction
 from tqdm import tqdm
 from lucidmodel.STUNet import STUNet
-# import monai.transforms as transforms
+from lucidutils import load_model
 
-def lucid(ct_path,outputpath= None,check=True,modelname=None,modelweight=None,output=105,adaptor=None):
+def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=None,modelweight=None,output=105,adaptor=None):
+    
     
     print(f"提供的NIfTI路径是:{ct_path}")
     file_path = os.path.dirname(os.path.abspath(__file__))
@@ -42,10 +43,6 @@ def lucid(ct_path,outputpath= None,check=True,modelname=None,modelweight=None,ou
         print("spacing need to be: [1.5,1.5,1.5]")
         ct_itk = resampleVolume([1.5,1.5,1.5],ct_itk,resamplemethod=sitk.sitkLinear)
 
-    outputdirname = f"lucid_{modelname}"
-    if not os.path.exists( os.path.join(os.path.dirname(ct_path),outputdirname)):
-        if outputpath is None:
-            os.mkdir(os.path.join(os.path.dirname(ct_path),outputdirname))
     if check:
         if direction_check < 0.05:
             print("direction check: OK!!")
@@ -58,8 +55,16 @@ def lucid(ct_path,outputpath= None,check=True,modelname=None,modelweight=None,ou
     else:
         print("arg chech is set to False so no direction check!!")
 
-    sitk.WriteImage(ct_itk, os.path.join(os.path.dirname(ct_path),f"lucid_ct.nii.gz"))
-    print("standard protocol nii has been write in ",os.path.join(os.path.dirname(ct_path),f"lucid_ct.nii.gz"))
+
+    if output_stdct_path is not None:
+        output_stdct_path_ = os.path.dirname(output_stdct_path)
+        if not os.path.exists(output_stdct_path_):
+            os.makedirs(output_stdct_path_)
+            print(f"目录已创建：{output_stdct_path_}")
+        sitk.WriteImage(ct_itk, output_stdct_path)
+        print("standard protocol nii has been write in ",output_stdct_path)
+    else:
+        print("if need to save CT.nii.gz file in standard protocol (1.5mm), use arg <output_stdct_path>")
     
     def scale_intensity_range(ct, a_min, a_max, b_min, b_max, clip):
         if clip:
@@ -74,79 +79,84 @@ def lucid(ct_path,outputpath= None,check=True,modelname=None,modelweight=None,ou
     ct = scale_intensity_range(ct, a_min=-1000, a_max=1000, b_min=0.0, b_max=1.0, clip=True)
     
     print("----------------model loading------------------------")
-
-    if modelname =="unet_large":
-        model = monai.networks.nets.UNet(
-                    spatial_dims=3,
-                    in_channels=1,
-                    out_channels=192,
-                    channels=(64,128,256,512,1024),
-                    strides=(2,2,2,2),
-                    num_res_units=2,
-                    norm=monai.networks.layers.Norm.INSTANCE,
-                )
-    elif modelname == "swinunetr":
-        model = monai.networks.nets.SwinUNETR(
-                img_size=(192,192,192),
-                in_channels=1,
-                out_channels=192,
-                feature_size=48,
-                drop_rate=0.1,
-                attn_drop_rate=0.1,
-                dropout_path_rate=0.1,
-            )
-    elif modelname=="STUNet_large":
-        model = STUNet(1, 192, depth=[2,2,2,2,2,2], dims=[64, 128, 256, 512, 1024, 1024],
-                    pool_op_kernel_sizes = ((2,2,2),(2,2,2),(2,2,2),(2,2,2),(2,2,2)),
-               conv_kernel_sizes = ((3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3)))
-    ckpt = torch.load(modelweight,map_location="cpu")
-    model.load_state_dict(ckpt["model"])
+    if isinstance(modelname,list):
+        print("emsemble mode!!")
+        wb_preds = 0
+        for mn,mn_ckpt in zip(modelname,modelweight):
+            model = load_model(mn)
+            ckpt = torch.load(mn_ckpt,map_location="cpu")
+            model.load_state_dict(ckpt["model"])
+    
+            model = model.to("cuda:0")
+            model = model.half()
+            model = model.eval()
+    
+            ct = ct.half()
+    
+            with torch.no_grad():
+                wb_pred = monai.inferers.sliding_window_inference(
+                            ct,(192,192,192),
+                            sw_batch_size=1,
+                            predictor=model,
+                            overlap=0.5,
+                            mode="constant",
+                            sw_device="cuda:0",
+                            device="cpu",
+                            progress=True)
+                # wb_pred = torch.sigmoid(wb_pred.float())
+                wb_preds += wb_pred
+        wb_pred = wb_preds / len(modelname)
+    else:    
+        print("single model mode!!")
+        model = load_model(modelname)
+        ckpt = torch.load(modelweight,map_location="cpu")
+        model.load_state_dict(ckpt["model"])
+            
+        model = model.to("cuda:0")
+        model = model.half()
+        model = model.eval()
+    
+        if adaptor is not None:
+            print("-----------------Adaptor is used! use: {}------------------------------".format(adaptor["name"]))
+            from adaptor import FourierTransform,Transform
+            if adaptor["name"] == "FT":
+                FT = FourierTransform(input_channel=2)
+                FT.load_state_dict(torch.load(adaptor["ckpt"])["model"])
+                FT = FT.to("cuda:0")
+                FT = FT.eval()
+                model = nn.Sequential(FT,model)
+            if adaptor["name"] == "T":
+                T = Transform()
+                T.load_state_dict(torch.load(adaptor["ckpt"])["model"])
+                T = T.half()
+                T = T.to("cuda:0")
+                T = T.eval()
+                model = nn.Sequential(T,model)
+        print("----------------Half-Precision inference------------------------")
         
-    model = model.to("cuda:0")
-    model = model.half()
-    model = model.eval()
-
-    if adaptor is not None:
-        print("-----------------Adaptor is used! use: {}------------------------------".format(adaptor["name"]))
-        from adaptor import FourierTransform,Transform
-        if adaptor["name"] == "FT":
-            FT = FourierTransform(input_channel=2)
-            FT.load_state_dict(torch.load(adaptor["ckpt"])["model"])
-            FT = FT.to("cuda:0")
-            FT = FT.eval()
-            model = nn.Sequential(FT,model)
-        if adaptor["name"] == "T":
-            T = Transform()
-            T.load_state_dict(torch.load(adaptor["ckpt"])["model"])
-            T = T.half()
-            T = T.to("cuda:0")
-            T = T.eval()
-            model = nn.Sequential(T,model)
-    print("----------------Half-Precision inference------------------------")
+        ct = ct.half()
     
-    ct = ct.half()
-
-    class SelectChannels(nn.Module):
-        def __init__(self):
-            super(SelectChannels, self).__init__()
-        def forward(self, x):
-            return x[:, :112]
-    model = nn.Sequential(model,SelectChannels())
-    
-    print("----------------sliding_window_inference------------------------")
-    
-    with torch.no_grad():
-        wb_pred = monai.inferers.sliding_window_inference(
-                    ct,(192,192,192),
-                    sw_batch_size=1,
-                    predictor=model,
-                    overlap=0.5,
-                    mode="constant",
-                    sw_device="cuda:0",
-                    device="cpu",
-                    progress=True)
-        # wb_pred = torch.sigmoid(wb_pred.float())
-        # wb_pred[wb_pred < 0.5] = 0
+        class SelectChannels(nn.Module):
+            def __init__(self):
+                super(SelectChannels, self).__init__()
+            def forward(self, x):
+                return x[:, :112]
+        model = nn.Sequential(model,SelectChannels())
+        
+        print("----------------sliding_window_inference------------------------")
+        
+        with torch.no_grad():
+            wb_pred = monai.inferers.sliding_window_inference(
+                        ct,(192,192,192),
+                        sw_batch_size=1,
+                        predictor=model,
+                        overlap=0.5,
+                        mode="constant",
+                        sw_device="cuda:0",
+                        device="cpu",
+                        progress=True)
+            # wb_pred = torch.sigmoid(wb_pred.float())
+            # wb_pred[wb_pred < 0.5] = 0
     
     print("----------------post-process------------------------")
     
@@ -158,10 +168,10 @@ def lucid(ct_path,outputpath= None,check=True,modelname=None,modelweight=None,ou
     sitk_image.SetSpacing(ct_itk.GetSpacing())
     sitk_image.SetOrigin(ct_itk.GetOrigin())
     print("----------------file saving------------------------")
-    if outputpath is not None:
-        sitk.WriteImage(sitk_image, outputpath)
-        print("create output path in ",outputpath)
-    else:
-        sitk.WriteImage(sitk_image, os.path.join(os.path.dirname(ct_path),outputdirname,f"combined.nii.gz"))
-        print("create combined nii.gz. ")
+    output_seg_path_ = os.path.dirname(output_seg_path)
+    if not os.path.exists(output_seg_path_):
+        os.makedirs(output_seg_path_)
+        print(f"目录已创建：{output_seg_path_}")
+    sitk.WriteImage(sitk_image, output_seg_path)
+    print("create combined nii.gz. ")
     

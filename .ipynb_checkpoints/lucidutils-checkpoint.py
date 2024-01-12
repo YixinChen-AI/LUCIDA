@@ -11,10 +11,10 @@ def load_model(modelname):
                     spatial_dims=3,
                     in_channels=1,
                     out_channels=192,
-                    channels=(64,64,128,256,512),
+                    channels=(64,128,256,512,1024),
                     strides=(2,2,2,2),
                     num_res_units=2,
-                    norm=monai.networks.layers.Norm.BATCH,
+                    norm=monai.networks.layers.Norm.INSTANCE,
                 )
     elif modelname == "swinunetr":
         model = monai.networks.nets.SwinUNETR(
