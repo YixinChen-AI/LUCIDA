@@ -17,14 +17,14 @@ chmod 777 ./install.sh
 1. 可以在python中调用
 ```
 from lucid_utils_low import lucid
-lucid("./testdata/autopet/CTres.nii.gz", # input ct nii.gz path
-      outputpath="./testdata/totalseg/output123.nii.gz",   
+lucid("./testdata/autopet/CTres.nii.gz", # input ct nii.gz path **required**
+      output_seg_path="./testdata/totalseg/output123.nii.gz", ## segmentation prediction result **required**
+      output_stdct_path=None, # the input ct will be resampled and re-oriented in LUCIDA protocol and the processed CT image will be saved in this path **optional**
       modelname="STUNet_large",
       modelweight="./model_weight/lucid_STUNet_large_192e40.pth",
      output=112)
 ```
-- outputpath: you can define the specific output segmentation nii.gz file to customized path. If you set None(default) to outputpath, the output file will be saved in "lucid_model_name/combiend.nii.gz".   
-2. 可以在命令行中调用
+2. 可以在命令行中调用 (暂未更新使用，暂时废弃)
 ```
 python lucid.py --ct ct_nii_path --gpu 0
 ```
