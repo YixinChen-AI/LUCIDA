@@ -13,6 +13,8 @@ chmod 777 ./install.sh
 ### step 2: well-trained ckpt
 将下载好的模型权重放到./model_weight/目录下.
 
+**目前权重文件需要联系作者YChen,邮箱是2311110791@stu.pku.edu.cn**
+
 ## step 3: inference
 1. 可以在python中调用
 ```
@@ -29,19 +31,6 @@ lucid("./testdata/autopet/CTres.nii.gz", # input ct nii.gz path **required**
 python lucid.py --ct ct_nii_path --gpu 0
 ```
 
-### step 4: output
-
-输出结果会存储在ct_path同级目录下：
-
-```
-anypath/
-│
-├── ct1/
-│ ├── ct.nii.gz
-│ └── lucid
-│  ├── combined.nii.gz
-
-```
 
 ### update
 
