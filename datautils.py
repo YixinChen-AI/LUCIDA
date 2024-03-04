@@ -1,7 +1,7 @@
 import SimpleITK as sitk
 
 
-def adjust_image_direction(image, desired_direction):
+def adjust_image_direction(image, desired_direction,verbose=True):
     """
     调整图像的方向到所需方向，如果需要的话会翻转图像。
     
@@ -14,7 +14,8 @@ def adjust_image_direction(image, desired_direction):
 
     # 计算需要翻转的轴
     flip_axes = [current_direction[i] * desired_direction[i] < 0 for i in [0,4,8]]
-    print("the axis need to be flip?:", flip_axes)
+    if verbose:
+        print("the axis need to be flip?:", flip_axes)
     # 翻转图像
     adjusted_image = sitk.Flip(image, flip_axes)
 

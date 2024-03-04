@@ -17,8 +17,8 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
     print(f"提供的NIfTI路径是:{ct_path}")
     file_path = os.path.dirname(os.path.abspath(__file__))
     
-    ct_itk = sitk.ReadImage(os.path.join(ct_path))
-    
+    orict_itk = sitk.ReadImage(os.path.join(ct_path))
+    ct_itk = orict_itk
     
     print("----------------direction check and spacing check------------------------")
     
@@ -104,6 +104,7 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
                             device="cpu",
                             progress=True)
                 # wb_pred = torch.sigmoid(wb_pred.float())
+                # wb_pred[wb_pred < 0.5] = 0
                 wb_preds += wb_pred
         wb_pred = wb_preds / len(modelname)
     else:    
@@ -159,8 +160,22 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
             # wb_pred[wb_pred < 0.5] = 0
     
     print("----------------post-process------------------------")
-    
-    combined = torch.argmax(wb_pred[0,:output],dim=0).detach().cpu().numpy()
+
+    combined = torch.argmax(wb_pred[0],dim=0).detach().cpu()
+    if output is not None:
+        new_pred = torch.zeros_like(combined)
+        for idx, labels in enumerate(output):
+            if isinstance(labels, list):
+                # 如果 labels 是一个列表，表示我们要取这些标签的并集
+                mask = torch.zeros_like(combined, dtype=torch.bool)
+                for label in labels:
+                    mask |= (combined == label)
+                new_pred[mask] = idx + 1  # 使用 idx + 1 作为新的标签索引
+            else:
+                # 否则，labels 就是一个单独的标签
+                new_pred[combined == labels] = idx + 1
+        combined = new_pred
+    combined = combined.numpy()
     # 创建SimpleITK图像
     sitk_image = sitk.GetImageFromArray(combined)
     # 设置方向和像素间距
@@ -172,6 +187,13 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
     if not os.path.exists(output_seg_path_):
         os.makedirs(output_seg_path_)
         print(f"目录已创建：{output_seg_path_}")
+    
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetReferenceImage(orict_itk)
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    sitk_image = resampler.Execute(sitk_image)
+    sitk_image = sitk.Cast(sitk_image, sitk.sitkUInt8)
+    
     sitk.WriteImage(sitk_image, output_seg_path)
-    print("create combined nii.gz. ")
+    print("create combined nii.gz. ",output_seg_path)
     

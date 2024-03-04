@@ -30,4 +30,13 @@ def load_model(modelname):
         model = STUNet(1, 192, depth=[2,2,2,2,2,2], dims=[64, 128, 256, 512, 1024, 1024],
                     pool_op_kernel_sizes = ((2,2,2),(2,2,2),(2,2,2),(2,2,2),(2,2,2)),
                conv_kernel_sizes = ((3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3)))
+    elif modelname=="STUNet_base":
+        model = STUNet(1, 112, depth=[2,2,2,2,2,2], dims=[32,64,128,256,512,1024],
+                    pool_op_kernel_sizes = ((2,2,2),(2,2,2),(2,2,2),(2,2,2),(2,2,2)),
+               conv_kernel_sizes = ((3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3)))
+    elif modelname == "STUNet_small":
+        model = STUNet(1, 112, depth=[1,1,1,1,1,1], dims=[32,64,128,256,512,512],
+                        pool_op_kernel_sizes = ((2,2,2),(2,2,2),(2,2,2),(2,2,2),(2,2,2)),
+                        conv_kernel_sizes = ((3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3),(3,3,3)))
     return model
+
