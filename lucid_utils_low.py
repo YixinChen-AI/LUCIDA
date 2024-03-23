@@ -11,26 +11,32 @@ from tqdm import tqdm
 from lucidmodel.STUNet import STUNet
 from lucidutils import load_model
 
-def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=None,modelweight=None,output=105,adaptor=None):
+def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=None,modelweight=None,output=None,adaptor=None):
     
     
     print(f"提供的NIfTI路径是:{ct_path}")
     file_path = os.path.dirname(os.path.abspath(__file__))
     
     orict_itk = sitk.ReadImage(os.path.join(ct_path))
-    ct_itk = orict_itk
+    ct_itk = sitk.ReadImage(os.path.join(ct_path))
     
     print("----------------direction check and spacing check------------------------")
+
+    print("before processing, spacing:",ct_itk.GetSpacing())
+    print("before processing, direction:",ct_itk.GetDirection())
     
-    def create_direction_matrix(x_dir, y_dir, z_dir):
-        # 创建一个3x3的方向矩阵
-        direction_matrix = [
-            x_dir, 0, 0,
-            0, y_dir, 0,
-            0, 0, z_dir
-        ]
-        return direction_matrix
     new_direction = (-1, 0, 0, 0, -1, 0, 0, 0, 1)
+    # new_origin = ct_itk.GetOrigin()  # 保持原点不变
+    new_spacing = (1.5,1.5,1.5)  # 保持间距不变
+    # reference_image = sitk.Image(ct_itk.GetSize(), ct_itk.GetPixelID())
+    # reference_image.SetOrigin(new_origin)
+    # reference_image.SetSpacing(new_spacing)
+    # reference_image.SetDirection(new_direction)
+    # identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+    # ct_itk = sitk.Resample(ct_itk, reference_image, identity_transform, sitk.sitkLinear, -1000.0)
+
+
+    
     direction_check = np.mean(np.abs(np.array(ct_itk.GetDirection()) - np.array(new_direction)))
     spacing_check = np.mean(np.abs(np.array(ct_itk.GetSpacing()) - np.array([1.5,1.5,1.5])))
 
@@ -43,17 +49,22 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
         print("spacing need to be: [1.5,1.5,1.5]")
         ct_itk = resampleVolume([1.5,1.5,1.5],ct_itk,resamplemethod=sitk.sitkLinear)
 
+    
+
     if check:
         if direction_check < 0.05:
             print("direction check: OK!!")
         else:
             print("direction is",np.array(ct_itk.GetDirection()))
             print("direction need to be: ",new_direction)
-                
             ct_itk = adjust_image_direction(ct_itk, new_direction)
             
     else:
         print("arg chech is set to False so no direction check!!")
+
+
+    print("after processing, spacing:",ct_itk.GetSpacing())
+    print("after processing, direction:",ct_itk.GetDirection())
 
 
     if output_stdct_path is not None:
@@ -75,8 +86,13 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
         return ct
         
     ct = sitk.GetArrayFromImage(ct_itk)
+
+    # import matplotlib.pyplot as plt
+    # plt.imshow(ct[20],cmap="gray")
+    # plt.show()
     ct = torch.tensor(ct).float().unsqueeze(0).unsqueeze(0)
     ct = scale_intensity_range(ct, a_min=-1000, a_max=1000, b_min=0.0, b_max=1.0, clip=True)
+
     
     print("----------------model loading------------------------")
     if isinstance(modelname,list):
@@ -98,7 +114,7 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
                             ct,(192,192,192),
                             sw_batch_size=1,
                             predictor=model,
-                            overlap=0.5,
+                            overlap=0,
                             mode="constant",
                             sw_device="cuda:0",
                             device="cpu",
@@ -111,8 +127,14 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
         print("single model mode!!")
         model = load_model(modelname)
         ckpt = torch.load(modelweight,map_location="cpu")
-        model.load_state_dict(ckpt["model"])
-            
+
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in ckpt['model'].items():  # 假设权重存储在'ckpt['model']'中
+            name = k[7:] if k.startswith('module.') else k  # 移除 'module.' 前缀
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
+        
         model = model.to("cuda:0")
         model = model.half()
         model = model.eval()
@@ -137,13 +159,6 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
         
         ct = ct.half()
     
-        class SelectChannels(nn.Module):
-            def __init__(self):
-                super(SelectChannels, self).__init__()
-            def forward(self, x):
-                return x[:, :112]
-        model = nn.Sequential(model,SelectChannels())
-        
         print("----------------sliding_window_inference------------------------")
         
         with torch.no_grad():
@@ -158,7 +173,7 @@ def lucid(ct_path,output_seg_path,output_stdct_path=None,check=True,modelname=No
                         progress=True)
             # wb_pred = torch.sigmoid(wb_pred.float())
             # wb_pred[wb_pred < 0.5] = 0
-    
+            wb_pred = wb_pred[:,:145]
     print("----------------post-process------------------------")
 
     combined = torch.argmax(wb_pred[0],dim=0).detach().cpu()
